@@ -1,28 +1,30 @@
 /**
  * Discord /stock 指令的处理服务, 跑在 Cloudflare Workers 上 (免费, 不需要一直挂机的服务器)。
  *
- * 工作原理:
- *   Discord 不需要一个"一直连着"的机器人进程就能支持斜杠指令,
- *   它会把用户在频道里打的指令, 通过HTTP POST发到你配置的"Interactions Endpoint URL",
- *   这个Worker就是接那个请求的地方, 处理完直接HTTP返回结果, 用完即走, 完全免费。
- *
- * 指令: /stock ticker:AAPL  →  返回该股票最近一周的新闻标题
+ * 流程:
+ *   1. 收到 /stock ticker:AAPL 这样的指令
+ *   2. 立刻回一个"占位"消息(DEFERRED), 因为Discord要求3秒内必须有响应,
+ *      而"抓新闻 + 调AI翻译摘要"这两步加起来经常会超过3秒
+ *   3. 后台(ctx.waitUntil)异步去抓Finnhub新闻, 再丢给Gemini整理成中文摘要
+ *   4. 处理完之后, 用Discord的"编辑原始消息"接口把占位消息替换成真正的内容
  */
 
 import { verifyKey } from "discord-interactions";
 
 const INTERACTION_TYPE = { PING: 1, APPLICATION_COMMAND: 2 };
-const RESPONSE_TYPE = { PONG: 1, CHANNEL_MESSAGE_WITH_SOURCE: 4 };
+const RESPONSE_TYPE = {
+  PONG: 1,
+  CHANNEL_MESSAGE_WITH_SOURCE: 4,
+  DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE: 5,
+};
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method !== "POST") {
       return new Response("Market Brief Discord Bot is running.", { status: 200 });
     }
 
-    // ---- 第一步: 验证请求确实来自Discord (防止别人伪造请求调用你的Worker) ----
-    // 按Discord官方教程的写法: 验证用原始字节(ArrayBuffer), 解析JSON时再单独读一次body,
-    // 这样能避免文本编码方式不一致导致验证失败的问题。
+    // ---- 验证请求确实来自Discord ----
     const signature = request.headers.get("X-Signature-Ed25519");
     const timestamp = request.headers.get("X-Signature-Timestamp");
     const bodyBuffer = await request.clone().arrayBuffer();
@@ -38,12 +40,10 @@ export default {
 
     const interaction = await request.json();
 
-    // ---- 第二步: Discord 会先发一个 PING 来验证你的endpoint是否正常, 必须秒回 PONG ----
     if (interaction.type === INTERACTION_TYPE.PING) {
       return jsonResponse({ type: RESPONSE_TYPE.PONG });
     }
 
-    // ---- 第三步: 处理真正的指令 ----
     if (interaction.type === INTERACTION_TYPE.APPLICATION_COMMAND) {
       const commandName = interaction.data?.name;
 
@@ -55,12 +55,9 @@ export default {
           return jsonResponse(replyText("请提供股票代码, 例如 `/stock ticker:AAPL`"));
         }
 
-        try {
-          const news = await fetchStockNews(ticker, env.FINNHUB_API_KEY);
-          return jsonResponse(replyNewsEmbed(ticker, news));
-        } catch (err) {
-          return jsonResponse(replyText(`抓取 ${ticker} 的新闻失败: ${err.message}`));
-        }
+        // 秒回占位消息, 真正的内容在后台处理完后异步编辑进去
+        ctx.waitUntil(handleStockCommand(ticker, interaction, env));
+        return jsonResponse({ type: RESPONSE_TYPE.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
       }
 
       return jsonResponse(replyText("未知指令。"));
@@ -70,40 +67,44 @@ export default {
   },
 };
 
-// ==================== 工具函数 ====================
+// ==================== 后台处理逻辑 ====================
 
-function jsonResponse(obj) {
-  return new Response(JSON.stringify(obj), {
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function replyText(text) {
-  return { type: RESPONSE_TYPE.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: text } };
-}
-
-function replyNewsEmbed(ticker, newsItems) {
-  if (!newsItems.length) {
-    return replyText(`没查到 ${ticker} 最近一周的新闻, 换个代码试试？`);
+async function handleStockCommand(ticker, interaction, env) {
+  let payload;
+  try {
+    const news = await fetchStockNews(ticker, env.FINNHUB_API_KEY);
+    if (!news.length) {
+      payload = { content: `没查到 ${ticker} 最近一周的新闻, 换个代码试试？` };
+    } else {
+      const summaryText = await summarizeNewsWithGemini(ticker, news, env.GEMINI_API_KEY);
+      payload = {
+        embeds: [
+          {
+            title: `📰 ${ticker} 最近新闻`,
+            description: summaryText.slice(0, 4000),
+            color: 0xf2a93c,
+            footer: { text: "数据来源: Finnhub · 中文摘要: Gemini" },
+          },
+        ],
+      };
+    }
+  } catch (err) {
+    payload = { content: `抓取/整理 ${ticker} 的新闻失败: ${err.message}` };
   }
-  const description = newsItems
-    .map((n) => `**${n.headline}**\n${n.summary}\n[查看原文](${n.url}) · \`${n.source}\``)
-    .join("\n\n")
-    .slice(0, 4000);
 
-  return {
-    type: RESPONSE_TYPE.CHANNEL_MESSAGE_WITH_SOURCE,
-    data: {
-      embeds: [
-        {
-          title: `📰 ${ticker} 最近新闻`,
-          description,
-          color: 0xf2a93c,
-          footer: { text: "数据来源: Finnhub" },
-        },
-      ],
-    },
-  };
+  await editOriginalInteractionResponse(env.DISCORD_APP_ID, interaction.token, payload);
+}
+
+async function editOriginalInteractionResponse(appId, interactionToken, payload) {
+  const url = `https://discord.com/api/v10/webhooks/${appId}/${interactionToken}/messages/@original`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    console.error("编辑原始消息失败:", res.status, await res.text());
+  }
 }
 
 async function fetchStockNews(ticker, finnhubApiKey) {
@@ -121,8 +122,64 @@ async function fetchStockNews(ticker, finnhubApiKey) {
   const data = await res.json();
   return data.slice(0, 5).map((n) => ({
     headline: n.headline || "(无标题)",
-    summary: n.summary ? n.summary.slice(0, 120) + (n.summary.length > 120 ? "…" : "") : "",
+    summary: n.summary || "",
     url: n.url || "",
     source: n.source || "",
   }));
+}
+
+async function summarizeNewsWithGemini(ticker, newsItems, geminiApiKey) {
+  // 没配置Gemini key的话, 退回原始英文列表, 不报错(降级思路跟每日简报那边一致)
+  if (!geminiApiKey) {
+    return newsItems
+      .map((n) => `**${n.headline}**\n${n.summary}\n[原文](${n.url}) · \`${n.source}\``)
+      .join("\n\n");
+  }
+
+  const newsText = newsItems
+    .map((n, i) => `${i + 1}. ${n.headline}\n${n.summary}`)
+    .join("\n\n");
+
+  const prompt = `你是财经编辑, 请把下面这些关于股票 ${ticker} 的英文新闻整理成中文。
+每条格式固定为: "**中文标题翻译**" 换行 "一句话说明为什么重要", 每条之间空一行。
+不要输出markdown代码块标记, 不要客套话, 直接给内容:
+
+${newsText}`;
+
+  const geminiUrl =
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
+
+  const res = await fetch(geminiUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.4, maxOutputTokens: 1500 },
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Gemini 返回状态码 ${res.status}`);
+  }
+
+  const data = await res.json();
+  const text = (data.candidates?.[0]?.content?.parts || [])
+    .map((p) => p.text || "")
+    .join("");
+  if (!text.trim()) {
+    throw new Error("Gemini 返回空内容");
+  }
+  return text.trim();
+}
+
+// ==================== 工具函数 ====================
+
+function jsonResponse(obj) {
+  return new Response(JSON.stringify(obj), {
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function replyText(text) {
+  return { type: RESPONSE_TYPE.CHANNEL_MESSAGE_WITH_SOURCE, data: { content: text } };
 }
