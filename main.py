@@ -19,6 +19,7 @@
 """
 
 import os
+import re
 import sys
 import smtplib
 import argparse
@@ -244,12 +245,14 @@ def build_prompt(data):
 """
 
 
-def call_gemini(prompt, timeout=30):
+def call_gemini(prompt, timeout=45):
     if not GEMINI_API_KEY:
         raise RuntimeError("未配置 GEMINI_API_KEY")
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2000},
+        # 之前设的2000经常不够用(中文比英文更"吃"token, 加上要生成4个板块的内容),
+        # 导致写到一半被硬切断。调大到4096基本能覆盖日报/周报的正常长度。
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 4096},
     }
     r = requests.post(GEMINI_URL, json=payload, timeout=timeout)
     r.raise_for_status()
@@ -257,6 +260,9 @@ def call_gemini(prompt, timeout=30):
     candidates = result.get("candidates", [])
     if not candidates:
         raise RuntimeError(f"Gemini 未返回内容: {result}")
+    finish_reason = candidates[0].get("finishReason", "")
+    if finish_reason == "MAX_TOKENS":
+        print("[warn] Gemini输出触顶被截断了, 内容可能不完整, 可以考虑再调大maxOutputTokens", file=sys.stderr)
     parts = candidates[0].get("content", {}).get("parts", [])
     text = "".join(p.get("text", "") for p in parts)
     if not text.strip():
@@ -421,6 +427,30 @@ def save_html_page(html_content, mode):
     return stable_name
 
 
+def cleanup_old_archives(mode, keep_days=30):
+    """只保留最近 keep_days 天的存档网页, 更早的自动删掉, 防止 docs/ 目录无限膨胀。
+    注意: 只清理带日期的存档文件(如 daily-2026-07-06.html), 不会碰 daily.html 这个固定链接。
+    """
+    if not os.path.isdir("docs"):
+        return
+    cutoff = dt.date.today() - dt.timedelta(days=keep_days)
+    pattern = re.compile(rf"^{re.escape(mode)}-(\d{{4}}-\d{{2}}-\d{{2}})\.html$")
+    removed = 0
+    for fname in os.listdir("docs"):
+        m = pattern.match(fname)
+        if not m:
+            continue
+        try:
+            file_date = dt.date.fromisoformat(m.group(1))
+        except ValueError:
+            continue
+        if file_date < cutoff:
+            os.remove(os.path.join("docs", fname))
+            removed += 1
+    if removed:
+        print(f"[info] 清理了 {removed} 个超过{keep_days}天的旧存档网页")
+
+
 # ==================== 第五步: 推送 ====================
 
 def send_email(subject, html_body):
@@ -488,6 +518,7 @@ def main():
 
     html_page = render_html_page(content_md, data, used_ai)
     page_path = save_html_page(html_page, args.mode)
+    cleanup_old_archives(args.mode, keep_days=30)
 
     page_url = None
     if PAGES_BASE_URL:
