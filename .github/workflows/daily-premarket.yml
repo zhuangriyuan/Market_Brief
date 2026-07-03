@@ -1,0 +1,31 @@
+name: 每日盘前简报
+
+on:
+  schedule:
+    # 12:30 UTC = 08:30 ET (夏令时/EDT, 3月-11月)
+    # 冬令时(EST, 11月-3月)要改成 "30 13 * * 1-5"
+    - cron: "30 12 * * 1-5"   # 周一至周五
+  workflow_dispatch: {}        # 允许在 GitHub 网页上手动点一下立即触发, 方便测试
+
+jobs:
+  send-brief:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 运行脚本
+        env:
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python main.py --mode daily
