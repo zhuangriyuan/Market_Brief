@@ -154,7 +154,8 @@ ${newsText}`;
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.4, maxOutputTokens: 1500 },
+      // 之前设的1500跟main.py犯了同一个错误, 太保守导致输出被截断, 调大一些
+      generationConfig: { temperature: 0.4, maxOutputTokens: 3000 },
     }),
   });
 
@@ -163,7 +164,11 @@ ${newsText}`;
   }
 
   const data = await res.json();
-  const text = (data.candidates?.[0]?.content?.parts || [])
+  const candidate = data.candidates?.[0];
+  if (candidate?.finishReason === "MAX_TOKENS") {
+    console.error("Gemini输出触顶被截断了, 可以考虑再调大maxOutputTokens");
+  }
+  const text = (candidate?.content?.parts || [])
     .map((p) => p.text || "")
     .join("");
   if (!text.trim()) {
