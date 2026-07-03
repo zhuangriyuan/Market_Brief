@@ -28,6 +28,7 @@ import requests
 
 # ---------- 配置: 从环境变量读取, 不要硬编码 ----------
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
+FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
@@ -41,12 +42,38 @@ GEMINI_URL = (
 )
 
 FINNHUB_BASE = "https://finnhub.io/api/v1"
+FRED_BASE = "https://api.stlouisfed.org/fred/"
+
+# 我们关心的官方宏观数据发布(用名字模糊匹配FRED的release列表, 不依赖硬编码release_id,
+# 因为release_id记错的风险比较大, 用名字匹配更稳妥)
+FRED_TARGET_RELEASES = [
+    "Consumer Price Index",
+    "Employment Situation",
+    "Producer Price Index",
+    "Gross Domestic Product",
+    "Personal Income and Outlays",
+    "Advance Monthly Sales for Retail and Food Services",
+    "Employment Cost Index",
+]
+
+# 财报日历噪音过滤: 只保留这些"大家真的会关心"的大市值/知名公司,
+# 可以根据自己的关注范围随时增删这个列表
+MAJOR_TICKERS = {
+    "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "NVDA", "TSLA", "AVGO",
+    "BRK.A", "BRK.B", "JPM", "V", "MA", "UNH", "XOM", "WMT", "PG", "JNJ",
+    "HD", "COST", "ABBV", "MRK", "KO", "PEP", "BAC", "CVX", "DIS", "ADBE",
+    "CRM", "NFLX", "AMD", "INTC", "QCOM", "TXN", "ORCL", "IBM", "CSCO",
+    "PYPL", "NKE", "MCD", "SBUX", "BA", "CAT", "GE", "GS", "MS", "WFC",
+    "C", "AXP", "DAL", "UAL", "AAL", "LUV", "UPS", "FDX", "T", "VZ",
+    "TMO", "ABT", "PFE", "LLY", "BMY", "GILD", "AMGN", "COP", "SLB",
+    "MU", "AMAT", "LRCX", "ASML", "TSM", "SPCX", "OPEN", "PLTR", "SNOW",
+}
 
 
 # ==================== 第一步: 抓数据 ====================
 
 def fetch_earnings_calendar(days_ahead=7):
-    """财报日历 (Finnhub 免费层)"""
+    """财报日历 (Finnhub 免费层), 过滤掉不常见的小盘股噪音"""
     today = dt.date.today()
     frm = today.isoformat()
     to = (today + dt.timedelta(days=days_ahead)).isoformat()
@@ -58,30 +85,62 @@ def fetch_earnings_calendar(days_ahead=7):
         )
         r.raise_for_status()
         data = r.json().get("earningsCalendar", [])
-        # 只保留大市值/常见股票可以在这里加一层过滤, 目前先全量返回
-        return data[:20]
+        major = [d for d in data if d.get("symbol") in MAJOR_TICKERS]
+        if major:
+            return major[:20]
+        # 如果这周没有任何大市值公司报财报, 就退回全量列表(至少不是空的)
+        return data[:10]
     except Exception as e:
         print(f"[warn] 财报日历抓取失败: {e}", file=sys.stderr)
         return []
 
 
 def fetch_economic_calendar(days_ahead=7):
-    """宏观经济日历 (Finnhub 免费层, 覆盖有限, 建议后续补充官方源如BLS/FRED)"""
-    today = dt.date.today()
-    frm = today.isoformat()
-    to = (today + dt.timedelta(days=days_ahead)).isoformat()
+    """宏观经济日历: 改用FRED(圣路易斯联储)官方免费API, 比商业数据商更权威、更稳定"""
+    if not FRED_API_KEY:
+        print("[warn] 未配置 FRED_API_KEY, 跳过宏观日历", file=sys.stderr)
+        return []
     try:
+        # 第一步: 拿到所有release, 用名字模糊匹配出我们关心的那几个
         r = requests.get(
-            f"{FINNHUB_BASE}/calendar/economic",
-            params={"from": frm, "to": to, "token": FINNHUB_API_KEY},
+            FRED_BASE + "releases",
+            params={"api_key": FRED_API_KEY, "file_type": "json"},
             timeout=15,
         )
         r.raise_for_status()
-        data = r.json().get("economicCalendar", [])
-        # 只看美国的
-        return [d for d in data if d.get("country") == "US"]
+        releases = r.json().get("releases", [])
+        matched = [
+            rel for rel in releases
+            if any(t.lower() in rel.get("name", "").lower() for t in FRED_TARGET_RELEASES)
+        ]
+
+        today = dt.date.today()
+        to = today + dt.timedelta(days=days_ahead)
+        events = []
+        for rel in matched:
+            rr = requests.get(
+                FRED_BASE + "release/dates",
+                params={
+                    "release_id": rel["id"],
+                    "api_key": FRED_API_KEY,
+                    "file_type": "json",
+                    "realtime_start": today.isoformat(),
+                    "realtime_end": to.isoformat(),
+                    # 必须加这个参数, 否则默认只返回"已经有数据"的历史发布日期, 不含未来日期
+                    "include_release_dates_with_no_data": "true",
+                },
+                timeout=15,
+            )
+            rr.raise_for_status()
+            for d in rr.json().get("release_dates", []):
+                date_str = d.get("date", "")
+                if today.isoformat() <= date_str <= to.isoformat():
+                    events.append({"time": date_str, "event": rel["name"], "prev": "", "estimate": ""})
+
+        events.sort(key=lambda x: x["time"])
+        return events
     except Exception as e:
-        print(f"[warn] 宏观日历抓取失败: {e}", file=sys.stderr)
+        print(f"[warn] 宏观日历抓取失败(FRED): {e}", file=sys.stderr)
         return []
 
 
@@ -123,9 +182,10 @@ def build_prompt(data):
         f"- {e.get('date')} {e.get('symbol')} 预期EPS {e.get('epsEstimate')}"
         for e in data["earnings"]
     )
+    # 注意: FRED只提供官方发布日期, 不含市场预期/前值(那是商业数据商才有的),
+    # 所以这里只给日期+数据名称, 预期解读交给AI基于数据本身的常识来写
     econ_text = "\n".join(
-        f"- {e.get('time')} {e.get('event')} (前值 {e.get('prev')}, 预期 {e.get('estimate')})"
-        for e in data["economic"]
+        f"- {e.get('time')} {e.get('event')}" for e in data["economic"]
     )
 
     if mode == "weekly":
@@ -224,13 +284,10 @@ def generate_raw_version(data):
         lines.append("(暂无数据)")
     lines.append("")
 
-    lines.append("【宏观日历】")
+    lines.append("【宏观日历(数据来源: FRED官方)】")
     if data["economic"]:
         for e in data["economic"][:10]:
-            lines.append(
-                f"- {e.get('time')} {e.get('event')} "
-                f"(前值 {e.get('prev')}, 预期 {e.get('estimate')})"
-            )
+            lines.append(f"- {e.get('time')} {e.get('event')}")
     else:
         lines.append("(暂无数据)")
 
