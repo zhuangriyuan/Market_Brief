@@ -404,6 +404,14 @@ def render_email_html(content_md, data, used_ai, page_url=None):
 def save_html_page(html_content, mode):
     """写入 docs/ 目录, 交给 GitHub Pages 发布。同时保留一份带日期的存档。"""
     os.makedirs("docs", exist_ok=True)
+
+    # 关键: 没有这个文件, GitHub Pages 会默认尝试用 Jekyll 构建 docs/ 目录,
+    # 但我们放的是纯HTML文件不是Jekyll项目结构, 会导致构建报错(SCSS找不到之类)。
+    # 加这个空文件告诉GitHub Pages "别用Jekyll处理, 原样发布静态文件就行"。
+    nojekyll_path = "docs/.nojekyll"
+    if not os.path.exists(nojekyll_path):
+        open(nojekyll_path, "w").close()
+
     today = dt.date.today().isoformat()
     stable_name = f"docs/{mode}.html"          # 固定链接, 永远是"最新一期"
     archive_name = f"docs/{mode}-{today}.html"  # 带日期的存档, 方便回看历史
