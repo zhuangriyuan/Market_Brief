@@ -21,20 +21,22 @@ export default {
     }
 
     // ---- 第一步: 验证请求确实来自Discord (防止别人伪造请求调用你的Worker) ----
+    // 按Discord官方教程的写法: 验证用原始字节(ArrayBuffer), 解析JSON时再单独读一次body,
+    // 这样能避免文本编码方式不一致导致验证失败的问题。
     const signature = request.headers.get("X-Signature-Ed25519");
     const timestamp = request.headers.get("X-Signature-Timestamp");
-    const bodyText = await request.text();
+    const bodyBuffer = await request.clone().arrayBuffer();
 
     const isValid =
       signature &&
       timestamp &&
-      (await verifyKey(bodyText, signature, timestamp, env.DISCORD_PUBLIC_KEY));
+      (await verifyKey(bodyBuffer, signature, timestamp, env.DISCORD_PUBLIC_KEY));
 
     if (!isValid) {
       return new Response("Bad request signature.", { status: 401 });
     }
 
-    const interaction = JSON.parse(bodyText);
+    const interaction = await request.json();
 
     // ---- 第二步: Discord 会先发一个 PING 来验证你的endpoint是否正常, 必须秒回 PONG ----
     if (interaction.type === INTERACTION_TYPE.PING) {

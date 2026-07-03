@@ -1,0 +1,29 @@
+name: 仓库保活
+
+# 目的: GitHub 规定一个仓库如果连续60天没有任何提交(commit), 会自动暂停里面所有的定时任务(cron)。
+# 虽然每日/每周简报本身跑成功时也会commit(生成的网页有变化), 但为了保险起见,
+# 单独加这个任务, 每月固定提交一次, 确保远远达不到60天这个阈值, 定时任务永远不会被暂停。
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"   # 每月1号 UTC 6:00 跑一次, 远小于60天的暂停线
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 更新保活文件并提交
+        run: |
+          mkdir -p .github
+          date -u +"最后一次保活提交: %Y-%m-%d %H:%M UTC" > .github/KEEPALIVE.md
+          git config user.name "market-brief-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add .github/KEEPALIVE.md
+          git diff --cached --quiet || git commit -m "chore: 仓库保活提交 [skip ci]"
+          git push
