@@ -320,49 +320,123 @@ def generate_content(data):
 
 # ==================== 第四步: 渲染成三种输出格式 ====================
 
+# 网页版模板: 参照原型设计做成"方块卡片"风格, 每个 ## 板块对应一张独立卡片
 HTML_PAGE_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  body {{
-    margin:0; padding:24px 16px 60px; background:#0b0f10; color:#e7e4db;
-    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-    line-height:1.75;
+  :root{{
+    --bg:#0b0f10; --panel:#12181a; --border:#232b2d;
+    --text:#e7e4db; --text-dim:#8b9296; --amber:#f2a93c;
   }}
-  .wrap {{ max-width:720px; margin:0 auto; }}
-  .eyebrow {{ font-size:12px; color:#f2a93c; letter-spacing:0.08em; margin-bottom:6px; }}
-  h1 {{ font-size:22px; margin:0 0 18px; }}
-  h2 {{ font-size:17px; color:#f2a93c; border-bottom:1px solid #232b2d; padding-bottom:6px; margin-top:28px; }}
-  ul {{ padding-left:20px; }}
-  li {{ margin-bottom:8px; font-size:14.5px; }}
-  strong {{ color:#fff; }}
-  code {{ background:#161d1f; padding:1px 6px; border-radius:4px; font-size:12px; color:#8b9296; }}
-  blockquote {{ border-left:3px solid #f2a93c; margin:0; padding:8px 14px; background:#161d1f; border-radius:6px; color:#f2a93c; font-size:13px; }}
-  .footer {{ margin-top:40px; font-size:11.5px; color:#8b9296; }}
+  *{{box-sizing:border-box;}}
+  body{{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:'IBM Plex Sans',-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }}
+  .app{{max-width:760px;margin:0 auto;padding-bottom:60px;}}
+  header{{padding:28px 20px 6px;}}
+  .eyebrow{{
+    font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--amber);
+    letter-spacing:0.12em;text-transform:uppercase;margin-bottom:8px;
+  }}
+  h1{{font-family:'Space Grotesk',sans-serif;font-size:24px;font-weight:700;margin:0;letter-spacing:-0.01em;}}
+  .content{{padding:16px 20px 0;}}
+  .card{{
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:18px 18px 16px;margin-bottom:14px;
+  }}
+  .card-head{{display:flex;align-items:center;gap:8px;margin-bottom:12px;}}
+  .card-tag{{
+    font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--amber);
+    border:1px solid rgba(242,169,60,0.35);padding:2px 7px;border-radius:5px;letter-spacing:0.04em;
+  }}
+  .card-title{{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:15.5px;}}
+  .card p{{font-size:13.5px;line-height:1.75;color:var(--text);margin:0 0 8px;}}
+  .card p:last-child{{margin-bottom:0;}}
+  .card ul{{margin:0;padding-left:20px;}}
+  .card li{{font-size:13.5px;line-height:1.8;margin-bottom:5px;}}
+  .card strong{{color:#fff;}}
+  table{{width:100%;border-collapse:collapse;font-size:13px;}}
+  td,th{{padding:7px 6px;text-align:left;border-bottom:1px solid var(--border);}}
+  th{{
+    color:var(--text-dim);font-weight:500;font-family:'IBM Plex Mono',monospace;
+    font-size:11px;text-transform:uppercase;letter-spacing:0.04em;
+  }}
+  .note-banner{{
+    background:rgba(242,169,60,0.08);border:1px solid rgba(242,169,60,0.25);border-radius:10px;
+    padding:12px 14px;font-size:12.5px;color:var(--amber);line-height:1.6;margin:0 0 14px;
+  }}
+  .footnote{{color:var(--text-dim);font-size:11.5px;line-height:1.7;padding:16px 20px 0;}}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="eyebrow">市场简报 · {date}</div>
-  <h1>{title}</h1>
-  {body}
-  <div class="footer">{footer}</div>
+<div class="app">
+  <header>
+    <div class="eyebrow">市场简报 · {date}</div>
+    <h1>{title}</h1>
+  </header>
+  <div class="content">
+    {body}
+  </div>
+  <div class="footnote">{footer}</div>
 </div>
 </body>
 </html>
 """
 
 
+def split_markdown_sections(content_md):
+    """按 '## 标题' 把markdown拆成 (标题, 正文) 的列表, 方便渲染成一张张卡片。
+    开头没有 '## ' 之前的内容(比如降级版开头的 '> ⚠️...' 提示行)会被放进标题为None的段落,
+    交给上层单独处理成提示条而不是卡片。
+    """
+    sections = []
+    current_title = None
+    current_body = []
+    for line in content_md.split("\n"):
+        if line.startswith("## "):
+            sections.append((current_title, "\n".join(current_body).strip()))
+            current_title = line[3:].strip()
+            current_body = []
+        else:
+            current_body.append(line)
+    sections.append((current_title, "\n".join(current_body).strip()))
+    return [(t, b) for t, b in sections if b or t]
+
+
 def render_html_page(content_md, data, used_ai):
     title = "下周市场展望" if data["mode"] == "weekly" else "今日盘前简报"
     tag = "AI整理版" if used_ai else "无AI降级版"
-    body_html = md.markdown(content_md, extensions=["extra"])
-    footer = f"生成方式: {tag} ｜ 数据来源: Finnhub / FRED"
+
+    blocks = []
+    card_index = 0
+    for heading, body_md in split_markdown_sections(content_md):
+        if heading is None:
+            # 没有标题的开头内容(降级版的提示行), 渲染成醒目的提示条而不是卡片
+            stripped = body_md.lstrip("> ").strip()
+            if stripped:
+                blocks.append(f'<div class="note-banner">{stripped}</div>')
+            continue
+        card_index += 1
+        body_html = md.markdown(body_md, extensions=["extra"]) if body_md else ""
+        blocks.append(
+            f'<div class="card">'
+            f'<div class="card-head">'
+            f'<span class="card-tag">{card_index:02d}</span>'
+            f'<span class="card-title">{heading}</span>'
+            f'</div>{body_html}</div>'
+        )
+
+    footer = f"生成方式: {tag} ｜ 数据来源: Finnhub / FRED ｜ 仅供参考, 不构成投资建议"
     return HTML_PAGE_TEMPLATE.format(
-        title=f"{title}［{tag}］", date=data["date"], body=body_html, footer=footer
+        title=f"{title}［{tag}］", date=data["date"], body="\n".join(blocks), footer=footer
     )
 
 
