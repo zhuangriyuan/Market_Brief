@@ -525,6 +525,52 @@ def cleanup_old_archives(mode, keep_days=30):
         print(f"[info] 清理了 {removed} 个超过{keep_days}天的旧存档网页")
 
 
+INDEX_TEMPLATE = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>市场简报</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body{
+    margin:0;background:#0b0f10;color:#e7e4db;font-family:'IBM Plex Sans',sans-serif;
+    display:flex;align-items:center;justify-content:center;min-height:100vh;
+  }
+  .box{max-width:420px;padding:20px;width:100%;}
+  h1{font-family:'Space Grotesk',sans-serif;font-size:22px;margin:0 0 22px;text-align:center;}
+  a.link{
+    display:block;background:#12181a;border:1px solid #232b2d;border-radius:12px;
+    padding:16px;margin-bottom:12px;color:#f2a93c;text-decoration:none;font-weight:600;
+    font-family:'Space Grotesk',sans-serif;transition:border-color .15s ease;
+  }
+  a.link:hover{border-color:#f2a93c;}
+  .desc{color:#8b9296;font-size:12px;margin-top:4px;font-weight:400;font-family:'IBM Plex Sans',sans-serif;}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>📈 市场简报</h1>
+  <a class="link" href="daily.html">今日盘前简报 →<div class="desc">最新一期</div></a>
+  <a class="link" href="weekly.html">下周市场展望 →<div class="desc">最新一期</div></a>
+</div>
+</body>
+</html>
+"""
+
+
+def ensure_index_page():
+    """生成/更新 docs/index.html 作为首页入口。
+    没有这个文件的话, 直接访问网站根目录(不带具体文件名)会被GitHub Pages当成404,
+    因为默认就是找 index.html 来显示。每次运行都会重新生成一次(内容固定, 不依赖当次数据),
+    确保daily/weekly两个入口链接始终都在。
+    """
+    os.makedirs("docs", exist_ok=True)
+    with open("docs/index.html", "w", encoding="utf-8") as f:
+        f.write(INDEX_TEMPLATE)
+
+
 # ==================== 第五步: 推送 ====================
 
 def send_email(subject, html_body):
@@ -593,6 +639,7 @@ def main():
     html_page = render_html_page(content_md, data, used_ai)
     page_path = save_html_page(html_page, args.mode)
     cleanup_old_archives(args.mode, keep_days=30)
+    ensure_index_page()
 
     page_url = None
     if PAGES_BASE_URL:
