@@ -7,6 +7,24 @@
 全程零成本, 部署完之后不需要你的电脑一直开着——所有东西都跑在云端
 (GitHub Actions + Cloudflare Workers), 跟你的电脑没有任何关系, 关机/换电脑都不影响运行。
 
+## 效果预览
+
+**每日盘前简报(Discord)**
+
+<img src="screenshots/daily.png" width="600" alt="每日盘前简报Discord效果图">
+
+**每周市场展望(Discord)**
+
+<img src="screenshots/weekly.png" width="600" alt="每周市场展望Discord效果图">
+
+**邮件版(HTML富文本, 底部带"查看网页版"链接)**
+
+<img src="screenshots/email.png" width="700" alt="邮件效果图">
+
+**`/stock` 查询指令(中文翻译+原文链接+日期)**
+
+<img src="screenshots/ticker.png" width="600" alt="stock指令效果图">
+
 ## 目录结构
 
 ```
@@ -15,6 +33,7 @@ market-brief/
 ├── requirements.txt
 ├── .gitignore
 ├── README.md                    # 本文档
+├── screenshots/                 # README里的效果预览图
 ├── .github/workflows/
 │   ├── daily-premarket.yml      # 每日盘前定时任务
 │   ├── weekly-summary.yml       # 每周总结定时任务
