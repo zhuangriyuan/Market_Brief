@@ -1,0 +1,18 @@
+# Node.js 依赖目录 - 不要提交, npm install 会自动重新生成
+discord-bot/node_modules/
+node_modules/
+
+# Wrangler 本地缓存/临时文件
+discord-bot/.wrangler/
+.wrangler/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 环境变量文件(如果你以后用.env做本地测试, 不要提交里面的密钥)
+.env
+
+# 系统文件
+.DS_Store
+Thumbs.db
