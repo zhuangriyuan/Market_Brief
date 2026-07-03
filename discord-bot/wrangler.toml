@@ -1,0 +1,6 @@
+name = "market-brief-bot"
+main = "worker.js"
+compatibility_date = "2024-09-01"
+
+# 密钥不要写在这个文件里! 用 `wrangler secret put <名字>` 命令设置,
+# 需要设置两个: DISCORD_PUBLIC_KEY 和 FINNHUB_API_KEY

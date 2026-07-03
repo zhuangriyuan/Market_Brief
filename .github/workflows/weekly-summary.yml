@@ -2,10 +2,12 @@ name: 每周市场总结
 
 on:
   schedule:
-    # 22:00 UTC 周日 = 18:00 ET 周日 (夏令时)
-    # 冬令时要改成 "0 23 * * 0"
-    - cron: "0 22 * * 0"
+    - cron: "0 22 * * 0"   # 18:00 ET 若当前是夏令时(EDT, UTC-4), 周日
+    - cron: "0 23 * * 0"   # 18:00 ET 若当前是冬令时(EST, UTC-5), 周日
   workflow_dispatch: {}
+
+permissions:
+  contents: write
 
 jobs:
   send-weekly:
@@ -28,5 +30,14 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_WEEKLY: ${{ secrets.DISCORD_WEBHOOK_WEEKLY }}
+          PAGES_BASE_URL: ${{ vars.PAGES_BASE_URL }}
         run: python main.py --mode weekly
+
+      - name: 把生成的网页提交回仓库 (供GitHub Pages发布)
+        run: |
+          git config user.name "market-brief-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/ || true
+          git diff --cached --quiet || git commit -m "chore: 更新每周市场展望网页 [skip ci]"
+          git push
