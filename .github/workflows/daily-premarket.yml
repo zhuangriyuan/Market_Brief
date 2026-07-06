@@ -1,17 +1,11 @@
 name: 每日盘前简报
 
 on:
-  schedule:
-    # 两个触发点分别对应EDT(夏令时)和EST(冬令时)下的"8:30 ET",
-    # 脚本内部会用纽约时间自动判断哪一个才是真正要执行的, 另一个会自动跳过。
-    # 你不需要每年手动切换。
-    - cron: "30 12 * * 1-5"   # 8:30 ET 若当前是夏令时(EDT, UTC-4)
-    - cron: "30 13 * * 1-5"   # 8:30 ET 若当前是冬令时(EST, UTC-5)
-    - cron: "30 18 * * 1-5"   # 临时测试用: 今天下午2:30 ET
-  workflow_dispatch: {}        # 手动点一下立即触发, 不受时间判断限制, 方便随时测试
+  workflow_dispatch: {}   # 现在由外部的cron-job.org主动触发, 不再依赖GitHub自己的schedule
+                          # (这个仓库的原生schedule触发器测试多次确认无法正常工作, 详见README)
 
 permissions:
-  contents: write   # 需要把生成的网页文件提交回仓库, 供 GitHub Pages 发布
+  contents: write
 
 jobs:
   send-brief:

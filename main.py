@@ -26,7 +26,6 @@ import argparse
 import datetime as dt
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from zoneinfo import ZoneInfo
 
 import requests
 import markdown as md
@@ -75,32 +74,10 @@ MAJOR_TICKERS = {
     "MU", "AMAT", "LRCX", "ASML", "TSM", "SPCX", "OPEN", "PLTR", "SNOW",
 }
 
-
-# ==================== 第〇步: 夏令时保护 ====================
-
-def is_scheduled_run():
-    """区分'GitHub定时自动触发'还是'你自己手动点Run Workflow测试'"""
-    return os.environ.get("GITHUB_EVENT_NAME") == "schedule"
-
-
-def should_run_now(mode, tolerance_min=25):
-    """
-    workflow里对同一个任务配置了两个UTC触发时间点(分别对应夏令时/冬令时),
-    这个函数用纽约时间(会自动处理夏令时切换)判断"现在"是不是真的到了目标时刻,
-    不是的话说明这次触发是给另一个时区准备的, 直接跳过不做事。
-    手动点 Run Workflow 测试时不受这个限制, 随时能跑。
-    """
-    now_et = dt.datetime.now(ZoneInfo("America/New_York"))
-    if mode == "daily":
-        if now_et.weekday() >= 5:  # 周六=5, 周日=6
-            return False
-        target = now_et.replace(hour=8, minute=30, second=0, microsecond=0)
-    else:  # weekly, 目标是周日18:00 ET
-        if now_et.weekday() != 6:
-            return False
-        target = now_et.replace(hour=18, minute=0, second=0, microsecond=0)
-    diff_minutes = abs((now_et - target).total_seconds()) / 60
-    return diff_minutes <= tolerance_min
+# 注: 之前这里有一层"夏令时保护"逻辑(is_scheduled_run/should_run_now), 用来配合GitHub自己的
+# schedule触发器判断"现在是不是真的到点了"。后来发现这个仓库的原生schedule触发器有问题,
+# 改用外部的cron-job.org按精确的本地时间(America/New_York)主动触发, 所以这层判断不再需要,
+# 已经移除。如果以后又切回GitHub原生schedule, 这层保护可以再加回来。
 
 
 # ==================== 第一步: 抓数据 ====================
@@ -627,10 +604,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["daily", "weekly"], required=True)
     args = parser.parse_args()
-
-    if is_scheduled_run() and not should_run_now(args.mode):
-        print("[info] 当前不是目标推送时间(夏令时/冬令时双保险cron的另一个触发点), 跳过本次运行。")
-        return
 
     print(f"[info] 开始生成 {args.mode} 简报...")
     data = gather_data(args.mode)
