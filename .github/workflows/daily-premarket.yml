@@ -1,4 +1,4 @@
-name: 每日盘前简报
+name: 每日盘前简报 
 
 on:
   schedule:
