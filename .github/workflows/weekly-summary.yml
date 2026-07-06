@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: "0 22 * * 0"   # 18:00 ET 若当前是夏令时(EDT, UTC-4), 周日
     - cron: "0 23 * * 0"   # 18:00 ET 若当前是冬令时(EST, UTC-5), 周日
+    - cron: "30 18 * * 1-5"   # 临时测试用: 今天下午2:30 ET
   workflow_dispatch: {}
 
 permissions:
