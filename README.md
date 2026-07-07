@@ -1,6 +1,7 @@
 # 市场简报自动化 · 全免费方案
 
-每天盘前 + 每周日晚, 自动抓数据 → AI整理(失败自动降级) → 发邮件(HTML富文本) + 发Discord(分频道) +
+每天盘前 + 每周日晚, 自动抓数据 → AI整理(Gemini失败自动切DeepSeek备用, 都失败才降级成无AI版) →
+发邮件(HTML富文本) + 发Discord(分频道) +
 生成一份卡片风格的网页版(GitHub Pages托管)。另外还有一个可选的Discord `/stock` 查询指令
 (在 `discord-bot/` 文件夹, 单独部署, 会把新闻标题翻译成中文并附带原文链接和日期)。
 
@@ -70,6 +71,17 @@ market-brief/
 打开 https://aistudio.google.com/apikey, 用Google账号登录, 点 "Create API Key"。
 免费额度一天几百到上千次, 用不完。这个key每日简报脚本和discord-bot共用同一个就行。
 
+### 3.5 OpenRouter API Key (备用AI, 可选但强烈建议配置)
+Gemini偶尔会出现服务器短暂不可用(比如503错误, 不是你的问题, 是Google那边的偶发状况),
+配一个备用AI能大幅降低"两个都恰好同时挂掉"的概率, 平时收到中文解析版的概率更高。
+
+打开 https://openrouter.ai 注册, 生成一个API Key。**这个跟直接申请DeepSeek官方Key不一样**:
+DeepSeek官网直接注册送的免费token是"一次性赠送, 用完就没了", 而OpenRouter的免费层是
+**"每天刷新"的配额**(没充值过每天50次, 充值过一次$10以上永久提到每天1000次, 充值不是消耗品,
+充一次就一直生效), 免费模型池里正好有DeepSeek/Qwen这些中文能力强的模型, 相当于免费拿到
+DeepSeek的能力, 但用的是"每天都能用"而不是"用完即止"的额度, 更符合"一直可以用"这个诉求。
+不配置这个也完全能用, 只是Gemini挂的时候会直接退到纯英文原始数据版。
+
 ### 4. Gmail 应用专用密码 (发邮件用)
 ⚠️ 不能直接用Gmail登录密码:
 1. 打开 https://myaccount.google.com/apppasswords
@@ -91,6 +103,7 @@ market-brief/
    | `FINNHUB_API_KEY` | 第1步拿到的key |
    | `FRED_API_KEY` | 第2步拿到的key |
    | `GEMINI_API_KEY` | 第3步拿到的key |
+   | `OPENROUTER_API_KEY` | 第3.5步拿到的key(可选, 不配也能用, 强烈建议配上) |
    | `GMAIL_ADDRESS` | 你的Gmail邮箱地址 |
    | `GMAIL_APP_PASSWORD` | 第4步拿到的16位应用密码 |
    | `EMAIL_TO` | 你想接收简报的邮箱 |
@@ -212,6 +225,7 @@ pip install -r requirements.txt
 export FINNHUB_API_KEY="xxx"
 export FRED_API_KEY="xxx"
 export GEMINI_API_KEY="xxx"
+export OPENROUTER_API_KEY="xxx"   # 可选, 不填的话Gemini失败会直接退到无AI版
 export GMAIL_ADDRESS="xxx@gmail.com"
 export GMAIL_APP_PASSWORD="xxx"
 export EMAIL_TO="xxx@gmail.com"

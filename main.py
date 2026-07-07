@@ -34,6 +34,7 @@ import markdown as md
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
 FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")  # 备用AI, Gemini挂了自动切这个
 GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 EMAIL_TO = os.environ.get("EMAIL_TO", "")
@@ -49,6 +50,13 @@ GEMINI_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
 )
+
+# OpenRouter 用的是 OpenAI 兼容接口, 免费层是"每天刷新"的配额(不是一次性赠送用完就没),
+# 免费模型池里有DeepSeek/Qwen等中文能力强的模型, 作为Gemini的备用AI
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = "deepseek/deepseek-chat-v3.1:free"  # 免费模型池会轮换, 如果这个失效了去
+                                                          # openrouter.ai/models 筛选 Price:Free 换一个
+
 
 FINNHUB_BASE = "https://finnhub.io/api/v1"
 FRED_BASE = "https://api.stlouisfed.org/fred/"
@@ -247,10 +255,38 @@ def call_gemini(prompt, timeout=45):
     return text.strip()
 
 
-def generate_ai_version(data):
+def call_openrouter(prompt, timeout=45):
+    """备用AI, 通过OpenRouter免费层调用DeepSeek模型。Gemini挂了(比如503)会自动切到这个,
+    只有两个都失败才会真的退到纯英文原始数据兜底版。OpenRouter免费层是每天刷新的配额,
+    不是一次性用完就没有的那种。"""
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("未配置 OPENROUTER_API_KEY")
+    headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.4,
+        "max_tokens": 4096,
+    }
+    r = requests.post(OPENROUTER_URL, headers=headers, json=payload, timeout=timeout)
+    r.raise_for_status()
+    result = r.json()
+    choices = result.get("choices", [])
+    if not choices:
+        raise RuntimeError(f"OpenRouter 未返回内容: {result}")
+    text = choices[0].get("message", {}).get("content", "")
+    if not text.strip():
+        raise RuntimeError("OpenRouter 返回空内容")
+    return text.strip()
+
+
+def generate_ai_version(data, provider):
     prompt = build_prompt(data)
-    text = call_gemini(prompt)
-    return text
+    if provider == "gemini":
+        return call_gemini(prompt)
+    elif provider == "openrouter":
+        return call_openrouter(prompt)
+    raise ValueError(f"未知的AI provider: {provider}")
 
 
 # ==================== 第三步: 无AI模板版 (保底方案, 同样输出Markdown) ====================
@@ -285,14 +321,19 @@ def generate_raw_version(data):
 
 
 def generate_content(data):
-    try:
-        content_md = generate_ai_version(data)
-        used_ai = True
-    except Exception as e:
-        print(f"[info] AI版生成失败, 自动降级为无AI版。原因: {e}", file=sys.stderr)
-        content_md = generate_raw_version(data)
-        used_ai = False
-    return content_md, used_ai
+    """三层降级: Gemini -> DeepSeek(备用AI) -> 纯英文原始数据兜底版。
+    两个AI都失败的概率远低于单个AI失败的概率, 大幅提高了"仍然能收到中文解析版"的概率。
+    """
+    for provider in ("gemini", "openrouter"):
+        try:
+            content_md = generate_ai_version(data, provider)
+            return content_md, True, provider
+        except Exception as e:
+            print(f"[info] {provider} 生成失败: {e}", file=sys.stderr)
+
+    print("[info] 所有AI都失败了, 降级为无AI版", file=sys.stderr)
+    content_md = generate_raw_version(data)
+    return content_md, False, None
 
 
 # ==================== 第四步: 渲染成三种输出格式 ====================
@@ -388,9 +429,18 @@ def split_markdown_sections(content_md):
     return [(t, b) for t, b in sections if b or t]
 
 
-def render_html_page(content_md, data, used_ai):
+def format_tag(used_ai, provider):
+    """统一生成"AI整理版(Gemini)" / "AI整理版(DeepSeek备用)" / "无AI降级版" 这种标签文字"""
+    if not used_ai:
+        return "无AI降级版"
+    if provider == "openrouter":
+        return "AI整理版(DeepSeek备用)"
+    return "AI整理版(Gemini)"
+
+
+def render_html_page(content_md, data, used_ai, provider=None):
     title = "下周市场展望" if data["mode"] == "weekly" else "今日盘前简报"
-    tag = "AI整理版" if used_ai else "无AI降级版"
+    tag = format_tag(used_ai, provider)
 
     blocks = []
     card_index = 0
@@ -436,9 +486,9 @@ EMAIL_TEMPLATE = """<!DOCTYPE html>
 """
 
 
-def render_email_html(content_md, data, used_ai, page_url=None):
+def render_email_html(content_md, data, used_ai, page_url=None, provider=None):
     title = "下周市场展望" if data["mode"] == "weekly" else "今日盘前简报"
-    tag = "AI整理版" if used_ai else "无AI降级版"
+    tag = format_tag(used_ai, provider)
     body_html = md.markdown(content_md, extensions=["extra"])
     # 邮件里h2标签换个更保守的行内样式, 部分邮箱客户端会吃掉<style>标签里的样式
     body_html = body_html.replace(
@@ -566,14 +616,14 @@ def send_email(subject, html_body):
     print("[ok] 邮件已发送")
 
 
-def send_discord(content_md, data, used_ai, page_url=None):
+def send_discord(content_md, data, used_ai, page_url=None, provider=None):
     webhook = DISCORD_WEBHOOK_WEEKLY if data["mode"] == "weekly" else DISCORD_WEBHOOK_DAILY
     if not webhook:
         print("[warn] 未配置对应的 Discord Webhook, 跳过Discord推送", file=sys.stderr)
         return
 
     title = "📈 下周市场展望" if data["mode"] == "weekly" else "📈 今日盘前简报"
-    tag = "AI整理版" if used_ai else "无AI降级版"
+    tag = format_tag(used_ai, provider)
     color = 0xF2A93C if used_ai else 0x8B9296
 
     # Discord embed description 上限4096字符, 超出的话截断并引导去网页版看完整内容
@@ -607,9 +657,9 @@ def main():
 
     print(f"[info] 开始生成 {args.mode} 简报...")
     data = gather_data(args.mode)
-    content_md, used_ai = generate_content(data)
+    content_md, used_ai, provider = generate_content(data)
 
-    html_page = render_html_page(content_md, data, used_ai)
+    html_page = render_html_page(content_md, data, used_ai, provider=provider)
     page_path = save_html_page(html_page, args.mode)
     cleanup_old_archives(args.mode, keep_days=30)
     ensure_index_page()
@@ -618,11 +668,11 @@ def main():
     if PAGES_BASE_URL:
         page_url = f"{PAGES_BASE_URL.rstrip('/')}/{args.mode}.html"
 
-    tag = "AI版" if used_ai else "无AI降级版"
+    tag = format_tag(used_ai, provider)
     subject_prefix = "下周市场展望" if args.mode == "weekly" else "今日盘前简报"
     subject = f"{subject_prefix} · {data['date']} [{tag}]"
 
-    email_html = render_email_html(content_md, data, used_ai, page_url=page_url)
+    email_html = render_email_html(content_md, data, used_ai, page_url=page_url, provider=provider)
 
     print("----- 生成内容预览(前300字) -----")
     print(content_md[:300])
@@ -630,7 +680,7 @@ def main():
     print("----------------------------------")
 
     send_email(subject, email_html)
-    send_discord(content_md, data, used_ai, page_url=page_url)
+    send_discord(content_md, data, used_ai, page_url=page_url, provider=provider)
 
 
 if __name__ == "__main__":
