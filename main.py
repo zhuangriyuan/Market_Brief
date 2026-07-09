@@ -650,10 +650,26 @@ def send_discord(content_md, data, used_ai, page_url=None, provider=None):
 
 # ==================== 主流程 ====================
 
+def already_sent_today(mode):
+    """检查今天是不是已经成功跑过一次了(通过带日期的存档网页文件是否存在来判断)。
+    配合cron-job.org设置多个重试时间点(比如8:30/8:35/8:40)使用: 前一次如果因为
+    GitHub基础设施问题("job not acquired by runner"这种)没能真正跑起来, 不会留下这个文件,
+    后面的触发点会正常执行; 如果前一次已经成功, 这个文件已经存在, 后面的触发点会直接跳过,
+    不会重复发送邮件/Discord消息。
+    """
+    today = dt.date.today().isoformat()
+    return os.path.exists(f"docs/{mode}-{today}.html")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["daily", "weekly"], required=True)
     args = parser.parse_args()
+
+    if already_sent_today(args.mode):
+        print(f"[info] 今天已经成功发送过{args.mode}简报了(存档文件已存在), 跳过本次运行, "
+              f"避免重复发送。这次触发大概率是cron-job.org设置的多个重试时间点之一。")
+        return
 
     print(f"[info] 开始生成 {args.mode} 简报...")
     data = gather_data(args.mode)
